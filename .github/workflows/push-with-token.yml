@@ -1,0 +1,24 @@
+# Pushes a commit to the given branch using this repository's GITHUB_TOKEN.
+name: push-with-token
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        required: true
+permissions:
+  contents: write
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
+      - env:
+          BRANCH: ${{ inputs.branch }}
+        run: |
+          echo "export const updatedBy = 'workflow';" >> src/app.ts
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "chore: automated update"
+          git push origin "HEAD:$BRANCH"
