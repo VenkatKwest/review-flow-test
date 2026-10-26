@@ -1,0 +1,53 @@
+# Re-requests reviews from trusted reviewers when someone else pushes after approval.
+name: review-refresh
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+permissions:
+  pull-requests: write
+jobs:
+  post_approval_changes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const trusted = new Set([context.repo.owner]);
+            const pr = context.payload.pull_request;
+            const isReopened = context.payload.action === 'reopened';
+            core.info(`event=${context.payload.action} actor=${context.actor} head=${pr.head.sha}`);
+            if (!isReopened && trusted.has(context.actor)) {
+              core.info('Action performed by a trusted maintainer, skipping as post approval changes are allowed.');
+              return;
+            }
+            if ([...pr.requested_reviewers, ...pr.requested_teams].length > 0) {
+              core.info('Skipping check as there are still pending reviews.');
+              return;
+            }
+            const all = await github.paginate(github.rest.pulls.listReviews, {...context.repo, pull_number: pr.number});
+            const known = new Set();
+            const reviews = [];
+            for (const review of all.slice().reverse()) {
+              if (review.state === 'COMMENTED') continue;
+              const user = review.user?.login;
+              if (!user || known.has(user)) continue;
+              if (!trusted.has(user)) continue;
+              known.add(user);
+              reviews.push(review);
+            }
+            core.info(`Latest reviews: ${reviews.map((r) => `${r.user.login}=${r.state}@${r.commit_id.slice(0, 7)}`).join(', ') || '(none)'}`);
+            if (reviews.length === 0) {
+              core.info('Skipping check as their are no reviews on the pull request.');
+              return;
+            }
+            if (reviews.some((r) => r.state !== 'APPROVED')) {
+              core.info('Skipping check as there are still non-approved review states.');
+              return;
+            }
+            if (reviews.some((r) => r.commit_id === pr.head.sha)) {
+              core.info('Passing check as at least one reviews is for the latest commit on the pull request');
+              return;
+            }
+            const reviewers = [...new Set(reviews.map((r) => r.user.login).filter((l) => l !== pr.user.login))];
+            core.info(`Requesting a new review from ${reviewers.join(', ')}`);
+            await github.rest.pulls.requestReviewers({...context.repo, pull_number: pr.number, reviewers});
